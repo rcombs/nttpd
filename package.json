@@ -1,0 +1,19 @@
+{
+  "author": "Rodger Combs <rodger.combs@gmail.com>",
+  "name": "nttpd",
+  "description": "A directory-based HTTP server for Node.js that executes Node files automatically",
+  "version": "0.0.2",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/11rcombs/nttpd.git"
+  },
+  "bin": {"nttpd": "main.js"},
+  "scripts": {
+    "test": "test.js"
+  },
+  "engines": {
+    "node": ">=0.4.7"
+  },
+  "dependencies": {"nomnom": "0.5.0"},
+  "devDependencies": {}
+}
