@@ -42,7 +42,6 @@ var handlers = {
                     res.writeHead(200, {'Content-Type': type});
                     res.end(data);
                 }else{
-                    res.writeHead(500,err.message, {"Content-Type": "text/html"});
                     lib.servePageForError(err,req,res);
                 }
             }    
@@ -88,7 +87,11 @@ var handlers = {
         }
         global.global = global;
         fs.readFile(filePath,"utf-8",function(err,data){
-            vm.runInNewContext(data,global,filePath);
+            try{
+                vm.runInNewContext(data,global,filePath);
+            }catch(e){
+                servePageForError(err,req,res);
+            }
             res.end();
         });
     }
