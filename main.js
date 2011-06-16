@@ -32,7 +32,8 @@ String.prototype.endsWith = function(pattern) {
     var d = this.length - pattern.length;
     return d >= 0 && this.lastIndexOf(pattern) === d;
 };
-mime.define({"application/node": ["njs"]});
+mime.define({"application/node-exec": ["njs"]});
+mime.define({"application/node-function": ["njf"]});
 var index = ["index.njs", "index.htm", "index.html"];
 var handlers = {
     "text/plain": function(req,res,type,filePath){
@@ -48,7 +49,7 @@ var handlers = {
         );
     },
     "application/javascript":"text/plain",
-    "application/node": function(req,res,type,filePath){
+    "application/node-exec": function(req,res,type,filePath){
         var statusText = lib.statusText;
         var global = {
             headers: {"Content-Type": "text/plain"},
@@ -89,11 +90,19 @@ var handlers = {
         fs.readFile(filePath,"utf-8",function(err,data){
             try{
                 vm.runInNewContext(data,global,filePath);
+                res.end();
             }catch(e){
-                servePageForError(err,req,res);
+                lib.servePageForError(e,req,res);
             }
-            res.end();
         });
+    },
+    "application/node-function": function(req,res,type,filePath){
+        try{
+            var func = require(filePath);
+            func.run(req,res,type,filePath);
+        }catch(e){
+            lib.servePageForError(e,req,res);
+        }
     }
 };
 function runHandlerForType(type,req,res,otype,filePath){
@@ -126,6 +135,7 @@ var server = http.createServer(function(req, res) {
             return;
         }
     }
+    filePath = path.resolve(filePath);
     if(changedPath || path.existsSync(filePath)){
         evalRequest(req,res,filePath);
     }else{
