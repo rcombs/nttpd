@@ -28,10 +28,15 @@ var fs = require("fs"),
             help: "Configuration file for the server. (Default: none)"
         }
     }).parseArgs();
+String.prototype.endsWith = function(pattern) {
+    var d = this.length - pattern.length;
+    return d >= 0 && this.lastIndexOf(pattern) === d;
+};
 mime.define({"application/node": ["njs"]});
+var index = ["index.njs", "index.htm", "index.html"];
 var handlers = {
-    "text/plain": function(req,res,type){
-        fs.readFile(path.join(options.basePath,decodeURIComponent(req.url)),
+    "text/plain": function(req,res,type,filePath){
+        fs.readFile(path,
             function(err,data){
                 if(!err){
                     res.writeHead(200, {'Content-Type': type});
@@ -44,14 +49,33 @@ var handlers = {
         );
     },
     "application/javascript":"text/plain",
-    "application/node": function(req,res,type){
+    "application/node": function(req,res,type,filePath){
+        var statusText = lib.statusText;
         var global = {
-            headers: {},
-            require: require
+            headers: {"Content-Type": "text/plain"},
+            require: require,
+            status: {code: 200, text: "OK"},
+            req: req,
+            res: res
+        };
+        global.setStatus = function(code,text){
+            global.status.code = code;
+            if(text){
+                global.status.text = text;
+            }else{
+                global.status.text = statusText[code];
+            }
+        };
+        global.redirect = function(location,code,text){
+            if(!code){
+                code = 301;
+            }
+            global.setStatus(code,text);
+            global.headers.Location = location;
         };
         global.echo = function(text){
             if(!global.headersSent){
-                res.writeHead(200,global.headers);
+                res.writeHead(global.status.code,global.status.text,global.headers);
                 global.headersSent = true;
             }
             res.write(text);
@@ -59,37 +83,50 @@ var handlers = {
         global.setHeader = function(name,value){
             global.headers[name] = value;
         };
+        global.setType = function(type){
+            global.headers["Content-Type"] = type;
+        }
         global.global = global;
-        fs.readFile(path.join(options.basePath,decodeURIComponent(req.url)),"utf-8",function(err,data){
-            vm.runInNewContext(data,global,path.join(options.basePath,decodeURIComponent(req.url)));
+        fs.readFile(filePath,"utf-8",function(err,data){
+            vm.runInNewContext(data,global,filePath);
             res.end();
         });
     }
 };
-function runHandlerForType(type,req,res,otype){
+function runHandlerForType(type,req,res,otype,filePath){
     if(!handlers[type]){
-        runHandlerForType("text/plain",req,res,"text/plain");
+        runHandlerForType("text/plain",req,res,"text/plain",filePath);
     }else if(typeof handlers[type] == "string"){
-        runHandlerForType(handlers[type],req,res,otype);
+        runHandlerForType(handlers[type],req,res,otype,filePath);
     }else{
-        handlers[type](req,res,otype);
+        handlers[type](req,res,otype,filePath);
     }
 }
-function evalRequest(req,res){
-    var url = decodeURIComponent(req.url);
-    var type = mime.lookup(url);
-    runHandlerForType(type,req,res,type);
+function evalRequest(req,res,filePath){
+    var type = mime.lookup(filePath);
+    runHandlerForType(type,req,res,type,filePath);
 }
 var server = http.createServer(function(req, res) {
     console.log((new Date()).toString()+": Request for URL: "+decodeURIComponent(req.url));
-    path.exists(path.join(options.basePath,decodeURIComponent(req.url)),
-        function(exists){
-            if(exists){
-                evalRequest(req,res);
-            }else{
-                lib.serveErrorPage(404,req,res);
+    var filePath = path.join(options.basePath,decodeURIComponent(req.url));
+    var changedPath = false;
+    if(filePath.endsWith("/")){
+        for(var i = 0; i < index.length; i++){
+            if(path.existsSync(path.join(filePath,index[i]))){
+                filePath = path.join(filePath,index[i]);
+                changedPath = true;
+                break;
             }
         }
-    );
+        if(!changedPath){
+            lib.serveErrorPage(404,req,res);
+            return;
+        }
+    }
+    if(changedPath || path.existsSync(filePath)){
+        evalRequest(req,res,filePath);
+    }else{
+        lib.serveErrorPage(404,req,res);
+    }
 });
 server.listen(options.port,options.host);
