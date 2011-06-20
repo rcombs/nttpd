@@ -1,10 +1,13 @@
 #!/usr/bin/env node
+const VERSION = "0.0.5";
 var fs = require("fs"),
     http = require("http"),
     url = require('url'),
     path = require("path"),
     mime = require("mime"),
     vm = require("vm"),
+    os = require("os"),
+    spawn = require("child_process").spawn;
     lib = require("./lib/all.js");
     options = require("nomnom").opts({
         host: {
@@ -37,7 +40,12 @@ String.prototype.endsWith = function(pattern) {
     var d = this.length - pattern.length;
     return d >= 0 && this.lastIndexOf(pattern) === d;
 };
-mime.define({"application/node-exec": ["njs"], "application/node-function": ["njf"]});
+mime.define({
+    "application/x-node-exec": ["njs"],
+    "application/x-node-function": ["njf"],
+    "application/x-cgi": ["pl", "cgi"],
+    "application/x-php": ["php"]
+});
 var index = ["index.njs", "index.htm", "index.html"];
 var handlers = {
     "text/plain": function(req,res,type,filePath){
@@ -53,7 +61,7 @@ var handlers = {
         );
     },
     "application/javascript":"text/plain",
-    "application/node-exec": function(req,res,type,filePath){
+    "application/x-node-exec": function(req,res,type,filePath){
         var statusText = lib.statusText;
         var global = {
             headers: {"Content-Type": "text/plain"},
@@ -103,18 +111,41 @@ var handlers = {
             }
         });
     },
-    "application/node-function": function(req,res,type,filePath){
+    "application/x-node-function": function(req,res,type,filePath){
         try{
             var func = requiredFiles[filePath] || require(filePath);
             func.run(req,res,type,filePath);
         }catch(e){
             lib.servePageForError(e,req,res);
         }
+    },
+    "application/x-cgi": function(req,res,type,filePath){
+        var envVars = {
+            SERVER_SOFTWARE: "nttpd v"+VERSION,
+            SERVER_NAME: os.hostname(),
+            GATEWAY_INTERFACE: "CGI/1.1",
+            SERVER_PROTOCOL: "HTTP/"+req.httpVersion,
+            SERVER_PORT: options.port,
+            REQUEST_METHOD: req.method,
+            PATH_INFO: "", // FIXME: WRITEME
+            PATH_TRANSLATED: filePath,
+            SCRIPT_NAME: req.pURL.pathname,
+            QUERY_STRING: req.pURL.query,
+            REMOTE_HOST: "", //  FIXME: WRITEME
+            REMOTE_ADDR: "", //  FIXME: WRITEME
+            AUTH_TYPE: "", // FIXME: WRITEME
+            REMOTE_USER: "", // FIXME: WRITEME
+            REMOTE_IDENT: "", // FIXME: WRITEME
+            CONTENT_TYPE: "", // FIXME: WRITEME
+            CONTENT_LENGTH: req.data.length
+        };
+        var process = spawn(filePath,[],{cwd: path.dirname(filePath), env: envVars, customFds: [req,res,-1]});
+        req.resume();
     }
 };
 function runHandlerForType(type,req,res,otype,filePath){
     if(!handlers[type]){
-        runHandlerForType("text/plain",req,res,"text/plain",filePath);
+        runHandlerForType("text/plain",req,res,otype,filePath);
     }else if(typeof handlers[type] == "string"){
         runHandlerForType(handlers[type],req,res,otype,filePath);
     }else{
@@ -127,6 +158,11 @@ function evalRequest(req,res,filePath){
 }
 var server = http.createServer(function(req, res) {
     console.log((new Date()).toString()+": Request for URL: "+decodeURIComponent(req.url));
+    req.data = "";
+    req.on("data",function(chunk){
+        this.data += chunk;
+    });
+    req.pause();
     req.pURL = url.parse(req.url);
     var filePath = path.join(options.basePath,decodeURIComponent(req.pURL.pathname));
     var changedPath = false;
@@ -157,13 +193,19 @@ var server = http.createServer(function(req, res) {
                 splitPath = splitPathO.slice(1);
                 var listDirFunction = function(err,list){
                     if(!err && list.indexOf(splitPath[splitPath.length-1]) != -1){
-                        evalRequest(req,res,path.join(options.basePath,splitPath.join("/")));
+                        fs.stat(splitPath.join("/"),function(err,stats){
+                            if(stats.isDirectory()){
+                                lib.serveErrorPage(404,req,res);
+                            }else{
+                                evalRequest(req,res,path.join(options.basePath,splitPath.join("/")));
+                            }
+                        });
                     }else if(!err){
                         var loaded = false;
                         var fileName = splitPath[splitPath.length-1];
                         for(var i = 0; i < list.length; i++){
-                            if(list[i].indexOf(fileName)+"." == 0 &&
-                            list[i].lastIndexOf(".") == fileName.length){
+                            if(list[i].indexOf(fileName) == 0 &&
+                            (list[i].lastIndexOf(".") == fileName.length || list[i].indexOf(".") == 0)){
                                 evalRequest(req,res,path.join(options.basePath,splitPath.slice(0,-1).join("/")+list[i]));
                                 loaded = true;
                             }
