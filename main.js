@@ -31,6 +31,20 @@ var fs = require("fs"),
             help: "Configuration file for the server. (Default: none)"
         }
     }).parseArgs();
+Object.defineProperty(Object.prototype, "extend", {
+    enumerable: false,
+    value: function(from) {
+        var props = Object.getOwnPropertyNames(from);
+        var dest = this;
+        props.forEach(function(name) {
+            if (name in dest) {
+                var destination = Object.getOwnPropertyDescriptor(from, name);
+                Object.defineProperty(dest, name, destination);
+            }
+        });
+        return this;
+    }
+});
 var config = {};
 var requiredFiles = {};
 if(options.configFile){
@@ -120,7 +134,7 @@ var handlers = {
         }
     },
     "application/x-cgi": function(req,res,type,filePath){
-        var envVars = {
+        var env = {
             SERVER_SOFTWARE: "nttpd v"+VERSION,
             SERVER_NAME: os.hostname(),
             GATEWAY_INTERFACE: "CGI/1.1",
@@ -133,14 +147,44 @@ var handlers = {
             QUERY_STRING: req.pURL.query,
             REMOTE_HOST: "", //  FIXME: WRITEME
             REMOTE_ADDR: "", //  FIXME: WRITEME
-            AUTH_TYPE: "", // FIXME: WRITEME
             REMOTE_USER: "", // FIXME: WRITEME
-            REMOTE_IDENT: "", // FIXME: WRITEME
-            CONTENT_TYPE: "", // FIXME: WRITEME
-            CONTENT_LENGTH: req.data.length
+            REMOTE_IDENT: "" // FIXME: WRITEME
         };
-        var process = spawn(filePath,[],{cwd: path.dirname(filePath), env: envVars, customFds: [req,res,-1]});
+        for (var header in req.headers) {
+            var name = 'HTTP_' + header.toUpperCase().replace(/-/g, '_');
+            env[name] = req.headers[header];
+        }
+        if ('content-length' in req.headers) {
+          env.CONTENT_LENGTH = req.headers['content-length'];
+        }
+        if ('content-type' in req.headers) {
+          env.CONTENT_TYPE = req.headers['content-type'];
+        }
+        if ('authorization' in req.headers) {
+          var auth = req.headers.authorization.split(' ');
+          env.AUTH_TYPE = auth[0];
+          //var unbase = new Buffer(auth[1], 'base64').toString().split(':');
+        }
+        env.extend(process.env);
+        var proc = spawn(filePath,[],{cwd: path.dirname(filePath), env: env});
+        req.pipe(proc.stdin);
         req.resume();
+        cgiResult = new lib.CGIParser(proc.stdout);
+        
+        // When the blank line after the headers has been parsed, then
+        // the 'headers' event is emitted with a Headers instance.
+        cgiResult.on('headers', function(headers) {
+            headers.forEach(function(header) {
+                // Don't set the 'Status' header. It's special, and should be
+                // used to set the HTTP response code below.
+                if (header.key === 'Status') return;
+                res.setHeader(header.key, header.value);
+            });
+            res.writeHead(parseInt(headers.status) || 200, {});
+            
+            // The response body is piped to the response body of the HTTP request
+            cgiResult.pipe(res);
+        });
     }
 };
 function runHandlerForType(type,req,res,otype,filePath){
