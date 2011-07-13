@@ -9,28 +9,6 @@ var fs = require("fs"),
     os = require("os"),
     spawn = require("child_process").spawn;
     lib = require("./lib/all.js");
-    options = require("nomnom").opts({
-        host: {
-            string: "-H HOST, --host=HOST",
-            default: "127.0.0.1",
-            help: "Host to serve at. (Default: 127.0.0.1)"
-        },
-        port: {
-            string: "-p PORT, --port=PORT",
-            default: 8080,
-            help: "HTTP port to serve at. (Default: 8080)"
-        },
-        basePath: {
-            string: "-b PATH, --base-path=PATH",
-            default: "./",
-            help: "Base path to serve from. (Default: ./)"
-        },
-        configFile: {
-            string: "-c PATH, --config-file=PATH",
-            default: false,
-            help: "Configuration file for the server. (Default: none)"
-        }
-    }).parseArgs();
 Object.defineProperty(Object.prototype, "extend", {
     enumerable: false,
     value: function(from) {
@@ -58,7 +36,8 @@ mime.define({
     "application/x-node-exec": ["njs"],
     "application/x-node-function": ["njf"],
     "application/x-cgi": ["pl", "cgi"],
-    "application/x-php": ["php"]
+    "application/x-php": ["php", "php5"],
+    "application/x-php-source": ["phps"]
 });
 var index = ["index.njs", "index.htm", "index.html"];
 var handlers = {
@@ -185,6 +164,118 @@ var handlers = {
             // The response body is piped to the response body of the HTTP request
             cgiResult.pipe(res);
         });
+    },
+    "application/x-php": function(req,res,type,filePath){
+        var env = {
+            SERVER_SOFTWARE: "nttpd v"+VERSION,
+            SERVER_NAME: os.hostname(),
+            GATEWAY_INTERFACE: "CGI/1.1",
+            SERVER_PROTOCOL: "HTTP/"+req.httpVersion,
+            SERVER_PORT: options.port,
+            REQUEST_METHOD: req.method,
+            PATH_INFO: "", // FIXME: WRITEME
+            PATH_TRANSLATED: filePath,
+            SCRIPT_NAME: req.pURL.pathname,
+            QUERY_STRING: req.pURL.query,
+            REMOTE_HOST: "", //  FIXME: WRITEME
+            REMOTE_ADDR: "", //  FIXME: WRITEME
+            REMOTE_USER: "", // FIXME: WRITEME
+            REMOTE_IDENT: "" // FIXME: WRITEME
+        };
+        for (var header in req.headers) {
+            var name = 'HTTP_' + header.toUpperCase().replace(/-/g, '_');
+            env[name] = req.headers[header];
+        }
+        if ('content-length' in req.headers) {
+          env.CONTENT_LENGTH = req.headers['content-length'];
+        }
+        if ('content-type' in req.headers) {
+          env.CONTENT_TYPE = req.headers['content-type'];
+        }
+        if ('authorization' in req.headers) {
+          var auth = req.headers.authorization.split(' ');
+          env.AUTH_TYPE = auth[0];
+          //var unbase = new Buffer(auth[1], 'base64').toString().split(':');
+        }
+        env.extend(process.env);
+        var proc = spawn("php-cgi",[filePath],{cwd: path.dirname(filePath), env: env});
+        req.pipe(proc.stdin);
+        req.resume();
+        cgiResult = new lib.CGIParser(proc.stdout);
+        
+        // When the blank line after the headers has been parsed, then
+        // the 'headers' event is emitted with a Headers instance.
+        cgiResult.on('headers', function(headers) {
+            headers.forEach(function(header) {
+                // Don't set the 'Status' header. It's special, and should be
+                // used to set the HTTP response code below.
+                if (header.key === 'Status') return;
+                res.setHeader(header.key, header.value);
+            });
+            res.writeHead(parseInt(headers.status) || 200, {});
+            
+            // The response body is piped to the response body of the HTTP request
+            cgiResult.pipe(res);
+        });
+    },
+    "application/x-php-source": function(req,res,type,filePath){
+        var env = {
+            SERVER_SOFTWARE: "nttpd v"+VERSION,
+            SERVER_NAME: os.hostname(),
+            GATEWAY_INTERFACE: "CGI/1.1",
+            SERVER_PROTOCOL: "HTTP/"+req.httpVersion,
+            SERVER_PORT: options.port,
+            REQUEST_METHOD: req.method,
+            PATH_INFO: "", // FIXME: WRITEME
+            PATH_TRANSLATED: filePath,
+            SCRIPT_NAME: req.pURL.pathname,
+            QUERY_STRING: req.pURL.query,
+            REMOTE_HOST: "", //  FIXME: WRITEME
+            REMOTE_ADDR: "", //  FIXME: WRITEME
+            REMOTE_USER: "", // FIXME: WRITEME
+            REMOTE_IDENT: "" // FIXME: WRITEME
+        };
+        for (var header in req.headers) {
+            var name = 'HTTP_' + header.toUpperCase().replace(/-/g, '_');
+            env[name] = req.headers[header];
+        }
+        if ('content-length' in req.headers) {
+          env.CONTENT_LENGTH = req.headers['content-length'];
+        }
+        if ('content-type' in req.headers) {
+          env.CONTENT_TYPE = req.headers['content-type'];
+        }
+        if ('authorization' in req.headers) {
+          var auth = req.headers.authorization.split(' ');
+          env.AUTH_TYPE = auth[0];
+          //var unbase = new Buffer(auth[1], 'base64').toString().split(':');
+        }
+        env.extend(process.env);
+        var proc = spawn("php-cgi",["-s", filePath]);
+        req.pipe(proc.stdin);
+        req.resume();
+        cgiResult = new lib.CGIParser(proc.stdout);
+        
+        // When the blank line after the headers has been parsed, then
+        // the 'headers' event is emitted with a Headers instance.
+        cgiResult.on('headers', function(headers) {
+            headers.forEach(function(header) {
+                // Don't set the 'Status' header. It's special, and should be
+                // used to set the HTTP response code below.
+                if (header.key === 'Status') return;
+                res.setHeader(header.key, header.value);
+            });
+            res.writeHead(parseInt(headers.status) || 200, {});
+            res.write("<!DOCTYPE html><html><head><title>PHP Source of "+req.pURL.href+"</title></head><body>");
+            
+            cgiResult.on("end",function(){
+                res.end("</body></html>");
+            });
+            
+            // The response body is piped to the response body of the HTTP request
+            cgiResult.pipe(res, {end: false});
+        });
+        console.log(proc);
     }
 };
 function runHandlerForType(type,req,res,otype,filePath){
@@ -200,76 +291,78 @@ function evalRequest(req,res,filePath){
     var type = mime.lookup(filePath);
     runHandlerForType(type,req,res,type,filePath);
 }
-var server = http.createServer(function(req, res) {
-    console.log((new Date()).toString()+": Request for URL: "+decodeURIComponent(req.url));
-    req.data = "";
-    req.on("data",function(chunk){
-        this.data += chunk;
-    });
-    req.pause();
-    req.pURL = url.parse(req.url);
-    var filePath = path.join(options.basePath,decodeURIComponent(req.pURL.pathname));
-    var changedPath = false;
-    if(filePath.endsWith("/")){
-        for(var i = 0; i < index.length; i++){
-            if(path.existsSync(path.join(filePath,index[i]))){
-                filePath = path.join(filePath,index[i]);
-                changedPath = true;
-                break;
+module.exports.listen = function(options){
+    var server = http.createServer(function(req, res) {
+        console.log((new Date()).toString()+": Request for URL: "+decodeURIComponent(req.url));
+        req.data = "";
+        req.on("data",function(chunk){
+            this.data += chunk;
+        });
+        req.pause();
+        req.pURL = url.parse(req.url);
+        var filePath = path.join(options.basePath,decodeURIComponent(req.pURL.pathname));
+        var changedPath = false;
+        if(filePath.endsWith("/")){
+            for(var i = 0; i < index.length; i++){
+                if(path.existsSync(path.join(filePath,index[i]))){
+                    filePath = path.join(filePath,index[i]);
+                    changedPath = true;
+                    break;
+                }
             }
         }
-    }
-    filePath = path.resolve(filePath);
-    if(changedPath){
-        evalRequest(req,res,filePath);
-    }else{
-        path.exists(filePath,function(exists){
-            if(exists){
-                fs.stat(filePath,function(err,stats){
-                    if(stats.isDirectory()){
-                        lib.serveDirIndex(req,res,req.pURL.pathname,filePath);
-                    }else{
-                        evalRequest(req,res,filePath);
-                    }
-                });
-            }else{
-                var splitPathO = req.pURL.pathname.split("/");
-                splitPath = splitPathO.slice(1);
-                var listDirFunction = function(err,list){
-                    if(!err && list.indexOf(splitPath[splitPath.length-1]) != -1){
-                        fs.stat(splitPath.join("/"),function(err,stats){
-                            if(stats.isDirectory()){
-                                lib.serveErrorPage(404,req,res);
-                            }else{
-                                evalRequest(req,res,path.join(options.basePath,splitPath.join("/")));
-                            }
-                        });
-                    }else if(!err){
-                        var loaded = false;
-                        var fileName = splitPath[splitPath.length-1];
-                        for(var i = 0; i < list.length; i++){
-                            if(list[i].indexOf(fileName) == 0 &&
-                            (list[i].lastIndexOf(".") == fileName.length || list[i].indexOf(".") == 0)){
-                                evalRequest(req,res,path.join(options.basePath,splitPath.slice(0,-1).join("/")+list[i]));
-                                loaded = true;
-                            }
+        filePath = path.resolve(filePath);
+        if(changedPath){
+            evalRequest(req,res,filePath);
+        }else{
+            path.exists(filePath,function(exists){
+                if(exists){
+                    fs.stat(filePath,function(err,stats){
+                        if(stats.isDirectory()){
+                            lib.serveDirIndex(req,res,req.pURL.pathname,filePath);
+                        }else{
+                            evalRequest(req,res,filePath);
                         }
-                        if(!loaded){
-                            if(splitPath.length > 1){
-                                splitPath = splitPath.slice(0,-1);
-                                fs.readdir(path.join(options.basePath,splitPath.slice(0,-1).join("/")),listDirFunction);
-                            }else{
-                                lib.serveErrorPage(404,req,res);
+                    });
+                }else{
+                    var splitPathO = req.pURL.pathname.split("/");
+                    splitPath = splitPathO.slice(1);
+                    var listDirFunction = function(err,list){
+                        if(!err && list.indexOf(splitPath[splitPath.length-1]) != -1){
+                            fs.stat(splitPath.join("/"),function(err,stats){
+                                if(stats.isDirectory()){
+                                    lib.serveErrorPage(404,req,res);
+                                }else{
+                                    evalRequest(req,res,path.join(options.basePath,splitPath.join("/")));
+                                }
+                            });
+                        }else if(!err){
+                            var loaded = false;
+                            var fileName = splitPath[splitPath.length-1];
+                            for(var i = 0; i < list.length; i++){
+                                if(list[i].indexOf(fileName) == 0 &&
+                                (list[i].lastIndexOf(".") == fileName.length || list[i].indexOf(".") == 0)){
+                                    evalRequest(req,res,path.join(options.basePath,splitPath.slice(0,-1).join("/")+list[i]));
+                                    loaded = true;
+                                }
                             }
+                            if(!loaded){
+                                if(splitPath.length > 1){
+                                    splitPath = splitPath.slice(0,-1);
+                                    fs.readdir(path.join(options.basePath,splitPath.slice(0,-1).join("/")),listDirFunction);
+                                }else{
+                                    lib.serveErrorPage(404,req,res);
+                                }
+                            }
+                        }else{
+                            splitPath = splitPath.slice(0,-1);
+                            fs.readdir(path.join(options.basePath,splitPath.slice(0,-1).join("/")),listDirFunction);
                         }
-                    }else{
-                        splitPath = splitPath.slice(0,-1);
-                        fs.readdir(path.join(options.basePath,splitPath.slice(0,-1).join("/")),listDirFunction);
                     }
+                    fs.readdir(path.join(options.basePath,splitPath.slice(0,-1).join("/")),listDirFunction);
                 }
-                fs.readdir(path.join(options.basePath,splitPath.slice(0,-1).join("/")),listDirFunction);
-            }
-        });
-    }
-});
-server.listen(options.port,options.host);
+            });
+        }
+    });
+    server.listen(options.port,options.host);
+}
