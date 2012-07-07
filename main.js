@@ -47,7 +47,7 @@ module.exports.listen = function(options){
         if(changedPath){
             evalRequest(req,res,filePath);
         }else{
-            path.exists(filePath,function(exists){
+            fs.exists(filePath,function(exists){
                 if(exists){
                     fs.stat(filePath,function(err,stats){
                         if(stats.isDirectory()){
