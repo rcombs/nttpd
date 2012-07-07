@@ -36,7 +36,7 @@ module.exports.listen = function(options){
         var changedPath = false;
         if(filePath.endsWith("/")){
             for(var i = 0; i < index.length; i++){
-                if(path.existsSync(path.join(filePath,index[i]))){
+                if(fs.existsSync(path.join(filePath,index[i]))){
                     filePath = path.join(filePath,index[i]);
                     changedPath = true;
                     break;
