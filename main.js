@@ -36,7 +36,7 @@ module.exports.listen = function(options){
         var changedPath = false;
         if(filePath.endsWith("/")){
             for(var i = 0; i < index.length; i++){
-                if(path.existsSync(path.join(filePath,index[i]))){
+                if(fs.existsSync(path.join(filePath,index[i]))){
                     filePath = path.join(filePath,index[i]);
                     changedPath = true;
                     break;
@@ -47,7 +47,7 @@ module.exports.listen = function(options){
         if(changedPath){
             evalRequest(req,res,filePath);
         }else{
-            path.exists(filePath,function(exists){
+            fs.exists(filePath,function(exists){
                 if(exists){
                     fs.stat(filePath,function(err,stats){
                         if(stats.isDirectory()){
